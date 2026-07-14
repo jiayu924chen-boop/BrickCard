@@ -97,12 +97,13 @@ namespace CardGame.EditorTools
         private static void BuildBoardCellPrefab()
         {
             var cell = CreateUiObject("BoardCell", null);
-            var image = cell.AddComponent<Image>();
-            image.color = new Color(0.89f, 0.92f, 0.96f, 1f);
+            var frame = cell.AddComponent<Image>();
+            frame.color = new Color(0.18f, 0.22f, 0.28f, 1f);
 
-            var outline = cell.AddComponent<Outline>();
-            outline.effectColor = new Color(0.18f, 0.22f, 0.30f, 0.65f);
-            outline.effectDistance = new Vector2(2f, -2f);
+            var fill = CreateUiObject("Fill", cell.transform);
+            var fillImage = fill.AddComponent<Image>();
+            fillImage.color = new Color(0.89f, 0.92f, 0.96f, 1f);
+            SetRect(fill.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f), new Vector2(-2f, -2f), Vector2.zero);
 
             var layout = cell.AddComponent<LayoutElement>();
             layout.preferredWidth = 86f;
@@ -117,16 +118,17 @@ namespace CardGame.EditorTools
         private static void BuildEditorGridCellPrefab()
         {
             var cell = CreateUiObject("EditorGridCell", null);
-            var image = cell.AddComponent<Image>();
-            image.color = new Color(0.82f, 0.87f, 0.93f, 1f);
+            var frame = cell.AddComponent<Image>();
+            frame.color = new Color(0.18f, 0.22f, 0.28f, 1f);
 
-            var outline = cell.AddComponent<Outline>();
-            outline.effectColor = new Color(0.15f, 0.18f, 0.24f, 0.35f);
-            outline.effectDistance = new Vector2(1f, -1f);
+            var fill = CreateUiObject("Fill", cell.transform);
+            var fillImage = fill.AddComponent<Image>();
+            fillImage.color = new Color(0.82f, 0.87f, 0.93f, 1f);
+            SetRect(fill.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f), new Vector2(-2f, -2f), Vector2.zero);
 
             var shapeCell = cell.AddComponent<ShapeGridCell>();
             var serializedObject = new SerializedObject(shapeCell);
-            serializedObject.FindProperty("targetImage").objectReferenceValue = image;
+            serializedObject.FindProperty("targetImage").objectReferenceValue = fillImage;
             serializedObject.ApplyModifiedPropertiesWithoutUndo();
 
             PrefabUtility.SaveAsPrefabAsset(cell, EditorGridCellPrefabPath);
@@ -189,7 +191,7 @@ namespace CardGame.EditorTools
             vertical.childControlWidth = true;
             vertical.childControlHeight = true;
             vertical.childForceExpandWidth = true;
-            vertical.childForceExpandHeight = false;
+            vertical.childForceExpandHeight = true;
 
             CreateMenuButton(panel.transform, "Start Game Button", "Start Game", SceneButtonAction.ButtonAction.LoadScene, "BattleScene", "Load battle scene");
             CreateMenuButton(panel.transform, "Board Editor Button", "Board Editor", SceneButtonAction.ButtonAction.LoadScene, "BoardEditorScene", "Open board editor");
@@ -473,6 +475,14 @@ namespace CardGame.EditorTools
         private static Canvas CreateCanvas(string name)
         {
             var canvasObject = new GameObject(name, typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+            var rectTransform = canvasObject.GetComponent<RectTransform>();
+            rectTransform.localScale = Vector3.one;
+            rectTransform.anchorMin = Vector2.zero;
+            rectTransform.anchorMax = Vector2.one;
+            rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            rectTransform.anchoredPosition = Vector2.zero;
+            rectTransform.sizeDelta = Vector2.zero;
+
             var canvas = canvasObject.GetComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
 
@@ -728,6 +738,9 @@ namespace CardGame.EditorTools
         {
             var buttonObject = CreateUiObject(name, parent);
             SetRect(buttonObject.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(360f, 72f), Vector2.zero);
+            var layout = buttonObject.AddComponent<LayoutElement>();
+            layout.preferredHeight = 72f;
+            layout.flexibleHeight = 1f;
 
             var image = buttonObject.AddComponent<Image>();
             image.color = new Color(0.22f, 0.46f, 0.78f, 1f);

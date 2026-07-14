@@ -9,11 +9,14 @@ namespace CardGame.Editors
     {
         [SerializeField] private GridLayoutGroup gridLayout;
         [SerializeField] private RectTransform contentRoot;
+        [SerializeField] private ScrollRect scrollRect;
+        [SerializeField] private RectTransform viewportRect;
         [SerializeField] private ShapeGridCell cellPrefab;
         [SerializeField, Range(1, ShapeEditorPaths.MaxGridSize)] private int columns = 10;
         [SerializeField, Range(1, ShapeEditorPaths.MaxGridSize)] private int rows = 8;
         [SerializeField, Range(12f, 64f)] private float cellSize = 32f;
         [SerializeField] private float spacing = 2f;
+        [SerializeField, Range(0f, 32f)] private float viewportPadding = 8f;
         [SerializeField] private bool editable = true;
         [SerializeField] private int historyLimit = 50;
 
@@ -23,6 +26,10 @@ namespace CardGame.Editors
         private bool[,] filledCells;
         private bool paintValue;
         private int filledCount;
+        private bool referencesCached;
+        private int hoveredX = -1;
+        private int hoveredY = -1;
+        private bool restoreScrollRectEnabled;
 
         public event Action Changed;
         public event Action ViewChanged;
@@ -42,12 +49,19 @@ namespace CardGame.Editors
             RebuildGrid(null);
         }
 
+        private void OnRectTransformDimensionsChange()
+        {
+            if (!referencesCached || !isActiveAndEnabled)
+            {
+                return;
+            }
+
+            ApplyLayoutSettings();
+        }
+
         private void Update()
         {
-            if (IsPainting && !Input.GetMouseButton(0))
-            {
-                EndPaint();
-            }
+            HandlePointerInput();
 
             if (!editable || !IsPrimaryShortcutHeld())
             {
@@ -77,6 +91,7 @@ namespace CardGame.Editors
             if (!editable)
             {
                 EndPaint();
+                ClearHover();
             }
         }
 
@@ -121,10 +136,20 @@ namespace CardGame.Editors
             PushUndoSnapshot();
             IsPainting = true;
             paintValue = value;
+            if (scrollRect != null)
+            {
+                restoreScrollRectEnabled = scrollRect.enabled;
+                scrollRect.enabled = false;
+            }
         }
 
         public void EndPaint()
         {
+            if (scrollRect != null)
+            {
+                scrollRect.enabled = restoreScrollRectEnabled;
+            }
+
             IsPainting = false;
         }
 
@@ -219,6 +244,50 @@ namespace CardGame.Editors
             HoverChanged?.Invoke(x, y, isHovered);
         }
 
+        private void HandlePointerInput()
+        {
+            CacheReferences();
+            if (!referencesCached)
+            {
+                return;
+            }
+
+            if (!editable)
+            {
+                return;
+            }
+
+            var screenPoint = Input.mousePosition;
+            var hasHoveredCell = TryGetCellAtScreenPoint(screenPoint, out var x, out var y);
+            UpdateHover(hasHoveredCell, x, y);
+
+            if (Input.GetMouseButtonDown(0) && hasHoveredCell)
+            {
+                BeginPaint(true);
+                ApplyPaint(x, y);
+            }
+
+            if (IsPainting)
+            {
+                if (Input.GetMouseButton(0))
+                {
+                    if (hasHoveredCell)
+                    {
+                        ApplyPaint(x, y);
+                    }
+                }
+                else
+                {
+                    EndPaint();
+                }
+            }
+
+            if (Input.GetMouseButtonDown(1) && hasHoveredCell)
+            {
+                EraseSingleCell(x, y);
+            }
+        }
+
         private void SetCell(int x, int y, bool value)
         {
             EnsureGridBuilt();
@@ -235,19 +304,9 @@ namespace CardGame.Editors
 
         private void RebuildGrid(IReadOnlyList<GridPoint> cells)
         {
-            if (gridLayout == null)
+            CacheReferences();
+            if (!referencesCached)
             {
-                gridLayout = GetComponentInChildren<GridLayoutGroup>(true);
-            }
-
-            if (contentRoot == null && gridLayout != null)
-            {
-                contentRoot = gridLayout.GetComponent<RectTransform>();
-            }
-
-            if (gridLayout == null || contentRoot == null || cellPrefab == null)
-            {
-                Debug.LogError("ShapeGridEditor is missing a grid layout, content root, or cell prefab.", this);
                 enabled = false;
                 return;
             }
@@ -276,7 +335,7 @@ namespace CardGame.Editors
                 var x = index % columns;
                 var y = index / columns;
                 cellViews[index].name = $"Cell_{x:00}_{y:00}";
-                cellViews[index].Initialize(this, x, y);
+                cellViews[index].Initialize();
             }
 
             if (cells != null)
@@ -301,18 +360,40 @@ namespace CardGame.Editors
 
         private void ApplyLayoutSettings()
         {
-            if (gridLayout == null || contentRoot == null)
+            CacheReferences();
+            if (!referencesCached)
             {
                 return;
             }
+
+            var gridWidth = columns * cellSize + Mathf.Max(0, columns - 1) * spacing;
+            var gridHeight = rows * cellSize + Mathf.Max(0, rows - 1) * spacing;
+            var viewportWidth = viewportRect != null ? viewportRect.rect.width : 0f;
+            var viewportHeight = viewportRect != null ? viewportRect.rect.height : 0f;
+
+            var extraHorizontal = Mathf.Max(0f, viewportWidth - gridWidth - (viewportPadding * 2f));
+            var extraVertical = Mathf.Max(0f, viewportHeight - gridHeight - (viewportPadding * 2f));
+            var leftPadding = Mathf.RoundToInt(viewportPadding + (extraHorizontal * 0.5f));
+            var rightPadding = Mathf.RoundToInt(viewportPadding + (extraHorizontal * 0.5f));
+            var topPadding = Mathf.RoundToInt(viewportPadding + (extraVertical * 0.5f));
+            var bottomPadding = Mathf.RoundToInt(viewportPadding + (extraVertical * 0.5f));
 
             gridLayout.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
             gridLayout.constraintCount = columns;
             gridLayout.cellSize = new Vector2(cellSize, cellSize);
             gridLayout.spacing = new Vector2(spacing, spacing);
-            contentRoot.sizeDelta = new Vector2(
-                columns * cellSize + (columns - 1) * spacing,
-                rows * cellSize + (rows - 1) * spacing);
+            gridLayout.startCorner = GridLayoutGroup.Corner.UpperLeft;
+            gridLayout.startAxis = GridLayoutGroup.Axis.Horizontal;
+            gridLayout.childAlignment = TextAnchor.UpperLeft;
+            gridLayout.padding = new RectOffset(leftPadding, rightPadding, topPadding, bottomPadding);
+
+            var contentWidth = gridWidth + leftPadding + rightPadding;
+            var contentHeight = gridHeight + topPadding + bottomPadding;
+            contentRoot.anchorMin = new Vector2(0f, 1f);
+            contentRoot.anchorMax = new Vector2(0f, 1f);
+            contentRoot.pivot = new Vector2(0f, 1f);
+            contentRoot.anchoredPosition = Vector2.zero;
+            contentRoot.sizeDelta = new Vector2(contentWidth, contentHeight);
             LayoutRebuilder.ForceRebuildLayoutImmediate(contentRoot);
         }
 
@@ -322,6 +403,41 @@ namespace CardGame.Editors
             {
                 RebuildGrid(null);
             }
+        }
+
+        private bool TryGetCellAtScreenPoint(Vector2 screenPoint, out int x, out int y)
+        {
+            x = -1;
+            y = -1;
+
+            if (viewportRect == null || contentRoot == null)
+            {
+                return false;
+            }
+
+            if (!RectTransformUtility.RectangleContainsScreenPoint(viewportRect, screenPoint))
+            {
+                return false;
+            }
+
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(contentRoot, screenPoint, null, out var localPoint))
+            {
+                return false;
+            }
+
+            var localX = localPoint.x - gridLayout.padding.left;
+            var localY = -localPoint.y - gridLayout.padding.top;
+            var gridWidth = columns * cellSize + Mathf.Max(0, columns - 1) * spacing;
+            var gridHeight = rows * cellSize + Mathf.Max(0, rows - 1) * spacing;
+            if (localX < 0f || localY < 0f || localX > gridWidth || localY > gridHeight)
+            {
+                return false;
+            }
+
+            var stride = cellSize + spacing;
+            x = Mathf.Clamp(Mathf.FloorToInt(localX / stride), 0, columns - 1);
+            y = Mathf.Clamp(Mathf.FloorToInt(localY / stride), 0, rows - 1);
+            return IsValidCell(x, y);
         }
 
         private bool IsValidCell(int x, int y)
@@ -338,6 +454,78 @@ namespace CardGame.Editors
         {
             return Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl) ||
                    Input.GetKey(KeyCode.LeftCommand) || Input.GetKey(KeyCode.RightCommand);
+        }
+
+        private void UpdateHover(bool hasHoveredCell, int x, int y)
+        {
+            if (hasHoveredCell && x == hoveredX && y == hoveredY)
+            {
+                return;
+            }
+
+            ClearHover();
+            if (!hasHoveredCell)
+            {
+                return;
+            }
+
+            hoveredX = x;
+            hoveredY = y;
+            HoverChanged?.Invoke(hoveredX, hoveredY, true);
+        }
+
+        private void ClearHover()
+        {
+            if (hoveredX < 0 || hoveredY < 0)
+            {
+                return;
+            }
+
+            HoverChanged?.Invoke(hoveredX, hoveredY, false);
+            hoveredX = -1;
+            hoveredY = -1;
+        }
+
+        private void CacheReferences()
+        {
+            if (referencesCached)
+            {
+                return;
+            }
+
+            if (gridLayout == null)
+            {
+                gridLayout = GetComponentInChildren<GridLayoutGroup>(true);
+            }
+
+            if (contentRoot == null && gridLayout != null)
+            {
+                contentRoot = gridLayout.GetComponent<RectTransform>();
+            }
+
+            if (scrollRect == null)
+            {
+                scrollRect = GetComponent<ScrollRect>();
+                if (scrollRect == null)
+                {
+                    scrollRect = GetComponentInChildren<ScrollRect>(true);
+                }
+            }
+
+            if (viewportRect == null)
+            {
+                viewportRect = scrollRect != null && scrollRect.viewport != null
+                    ? scrollRect.viewport
+                    : contentRoot != null ? contentRoot.parent as RectTransform : null;
+            }
+
+            if (gridLayout == null || contentRoot == null || cellPrefab == null)
+            {
+                Debug.LogError("ShapeGridEditor is missing a grid layout, content root, or cell prefab.", this);
+                return;
+            }
+
+            referencesCached = true;
         }
 
         private GridSnapshot CaptureSnapshot()
